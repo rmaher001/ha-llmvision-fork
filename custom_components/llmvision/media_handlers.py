@@ -252,11 +252,115 @@ class MediaProcessor:
                 await asyncio.sleep(retry_delay)
         _LOGGER.warning(f"Failed to fetch {url} after {max_retries} retries")
 
+    def _select_frames_with_minimums(self, camera_frames, first_frames, max_frames, min_frames_per_camera, image_entities):
+        """Select frames ensuring minimum representation per camera.
+
+        Args:
+            camera_frames: Dict of camera_entity -> {frame_name: {frame_data, ssim_score}}
+            first_frames: Dict of camera_entity -> (frame_label, frame_bytes)
+            max_frames: Maximum total frames to select
+            min_frames_per_camera: Minimum frames each camera should contribute
+            image_entities: List of camera entities in order
+
+        Returns:
+            list: Selected frames as (frame_name, frame_data, ssim_score) tuples
+        """
+        if min_frames_per_camera == 0:
+            # Original behavior - prepend first frames, then best scored
+            selected_frames = []
+            remaining = max(0, max_frames)
+
+            # Prepend first frames in the order of requested entities
+            for entity in image_entities:
+                if remaining <= 0:
+                    break
+                if entity in first_frames:
+                    label, data = first_frames[entity]
+                    selected_frames.append((label, data, None))
+                    remaining -= 1
+
+            # Extract all frames with scores
+            frames_with_scores = []
+            for camera_entity in camera_frames:
+                for frame_name, frame_data in camera_frames[camera_entity].items():
+                    frames_with_scores.append(
+                        (frame_name, frame_data["frame_data"], frame_data["ssim_score"])
+                    )
+            frames_with_scores.sort(key=lambda x: x[2])
+
+            # Fill remaining slots with best scored frames
+            for name, data, score in frames_with_scores:
+                if remaining <= 0:
+                    break
+                selected_frames.append((name, data, score))
+                remaining -= 1
+
+            return selected_frames
+
+        # Build list of all frames with camera info
+        all_frames = []
+        for camera_entity in camera_frames:
+            for frame_name, frame_data in camera_frames[camera_entity].items():
+                all_frames.append(
+                    (frame_name, frame_data["frame_data"], frame_data["ssim_score"], camera_entity)
+                )
+
+        # Sort by SSIM score (lower = more distinct)
+        all_frames.sort(key=lambda x: x[2])
+
+        selected_frames = []
+        selected_frame_names = set()
+
+        # Initialize counts for all cameras from both camera_frames and first_frames
+        all_camera_entities = set(camera_frames.keys()) | set(first_frames.keys())
+        camera_frame_counts = {camera: 0 for camera in all_camera_entities}
+
+        # Warn if minimum guarantees cannot be met
+        num_cameras = len(all_camera_entities)
+        if num_cameras > 0 and (min_frames_per_camera * num_cameras) > max_frames:
+            _LOGGER.warning(
+                f"min_frames_per_camera ({min_frames_per_camera}) * num_cameras ({num_cameras}) "
+                f"= {min_frames_per_camera * num_cameras} exceeds max_frames ({max_frames}). "
+                f"Not all cameras will receive minimum allocation."
+            )
+
+        # Include first frames in counts
+        for entity in image_entities:
+            if entity in first_frames:
+                label, data = first_frames[entity]
+                selected_frames.append((label, data, None))
+                selected_frame_names.add(label)
+                if entity in camera_frame_counts:
+                    camera_frame_counts[entity] = 1
+
+        # First pass: satisfy minimum frames per camera
+        for frame_name, frame_data, ssim_score, camera_entity in all_frames:
+            if len(selected_frames) >= max_frames:
+                break
+            if frame_name in selected_frame_names:
+                continue  # Skip already selected frames
+            if camera_frame_counts[camera_entity] < min_frames_per_camera:
+                selected_frames.append((frame_name, frame_data, ssim_score))
+                selected_frame_names.add(frame_name)
+                camera_frame_counts[camera_entity] += 1
+
+        # Second pass: fill remaining slots with best frames
+        for frame_name, frame_data, ssim_score, camera_entity in all_frames:
+            if len(selected_frames) >= max_frames:
+                break
+            if frame_name in selected_frame_names:
+                continue  # Skip already selected frames
+            selected_frames.append((frame_name, frame_data, ssim_score))
+            selected_frame_names.add(frame_name)
+
+        return selected_frames
+
     async def record(
         self,
         image_entities,
         duration,
         max_frames,
+        min_frames_per_camera,
         target_width,
         include_filename,
         expose_images,
@@ -402,36 +506,10 @@ class MediaProcessor:
             )
         )
 
-        # Extract frames and their SSIM scores
-        frames_with_scores = []
-        for frame in camera_frames:
-            for frame_name, frame_data in camera_frames[frame].items():
-                frames_with_scores.append(
-                    (frame_name, frame_data["frame_data"], frame_data["ssim_score"])
-                )
-
-        # Sort frames by SSIM score
-        frames_with_scores.sort(key=lambda x: x[2])
-
-        # Frame selection: prepend first frames, then best-scored (respect max_frames)
-        selected_frames = []
-        remaining = max(0, max_frames)
-
-        # Prepend first frames in the order of requested entities
-        for entity in image_entities:
-            if remaining <= 0:
-                break
-            if entity in first_frames:
-                label, data = first_frames[entity]
-                selected_frames.append((label, data, None))
-                remaining -= 1
-
-        # Fill remaining slots with best scored frames
-        for name, data, score in frames_with_scores:
-            if remaining <= 0:
-                break
-            selected_frames.append((name, data, score))
-            remaining -= 1
+        # Select frames using minimum per camera logic
+        selected_frames = self._select_frames_with_minimums(
+            camera_frames, first_frames, max_frames, min_frames_per_camera, image_entities
+        )
 
         # Add selected frames to client
         if selected_frames:
@@ -890,6 +968,7 @@ class MediaProcessor:
         image_entities,
         duration,
         max_frames,
+        min_frames_per_camera,
         target_width,
         include_filename,
         expose_images,
@@ -899,6 +978,7 @@ class MediaProcessor:
                 image_entities=image_entities,
                 duration=duration,
                 max_frames=max_frames,
+                min_frames_per_camera=min_frames_per_camera,
                 target_width=target_width,
                 include_filename=include_filename,
                 expose_images=expose_images,

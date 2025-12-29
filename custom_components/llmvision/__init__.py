@@ -50,6 +50,7 @@ from .const import (
     INTERVAL,
     DURATION,
     MAX_FRAMES,
+    MIN_FRAMES_PER_CAMERA,
     INCLUDE_FILENAME,
     EXPOSE_IMAGES,
     GENERATE_TITLE,
@@ -557,6 +558,7 @@ class ServiceCallData:
         self.interval = int(data_call.data.get(INTERVAL, 2))
         self.duration = int(data_call.data.get(DURATION, 10))
         self.max_frames = int(data_call.data.get(MAX_FRAMES, 3))
+        self.min_frames_per_camera = int(data_call.data.get(MIN_FRAMES_PER_CAMERA, 0))
         self.target_width = data_call.data.get(TARGET_WIDTH, 3840)
         self.temperature = float()
         self.max_tokens = int(data_call.data.get(MAXTOKENS, 3000))
@@ -716,6 +718,7 @@ def setup(hass, config):
             image_entities=call.image_entities,
             duration=call.duration,
             max_frames=call.max_frames,
+            min_frames_per_camera=call.min_frames_per_camera,
             target_width=call.target_width,
             include_filename=call.include_filename,
             expose_images=call.expose_images,

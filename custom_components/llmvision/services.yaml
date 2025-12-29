@@ -285,6 +285,17 @@ stream_analyzer:
           min: 1
           max: 10
           step: 1
+    min_frames_per_camera:
+      name: Minimum Frames Per Camera
+      description: Minimum frames each camera must contribute. Set to 0 to disable (default behavior).
+      required: false
+      example: 1
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 1
     include_filename:
       name: Include camera name
       required: true
